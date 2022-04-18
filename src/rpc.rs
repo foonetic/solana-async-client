@@ -103,7 +103,7 @@ pub struct AccountInfoReply {
 #[derive(Deserialize, Debug)]
 pub struct AccountInfoReplyResult {
     pub context: ContextWithSlot,
-    pub value: AccountInfoReplyResultValue,
+    pub value: Option<AccountInfoReplyResultValue>,
 }
 
 #[derive(Deserialize, Debug)]

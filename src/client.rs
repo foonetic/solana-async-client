@@ -326,53 +326,62 @@ impl RpcClient {
         pubkey: &Pubkey,
         commitment: CommitmentLevel,
         data_slice: Option<&DataSlice>,
-    ) -> Result<AccountInfo, Error> {
+    ) -> Result<Option<AccountInfo>, Error> {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":["{}",{{"commitment":"{}","encoding":"base64+zstd"{}}}]}}"#,
+            pubkey.to_string(),
+            commitment.to_string(),
+            if let Some(data_slice) = data_slice {
+                format!(
+                    r#","dataSlice":{{"offset":{},"length":{}}}"#,
+                    data_slice.offset, data_slice.length
+                )
+            } else {
+                "".to_string()
+            }
+        );
         let response = self
             .http
             .post(&self.url)
-            .body(format!(
-                r#"{{"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":["{}",{{"commitment":"{}","encoding":"base64+zstd"{}}}]}}"#,
-                pubkey.to_string(),
-                commitment.to_string(),
-                if let Some(data_slice) = data_slice {
-                    format!(r#","dataSlice":{{"offset":{},"length":{}}}"#, data_slice.offset, data_slice.length)
-                } else {
-                    "".to_string()
-                }
-            ))
+            .body(body)
             .header("Content-Type", "application/json")
             .send()
             .await?
             .text()
             .await?;
 
+
         let response = parse_json::<AccountInfoReply>(&response)?;
 
-        match response.result.value.data.get(1) {
-            None => {
-                return Err(Error::MissingAccountEncoding);
-            }
-            Some(encoding) => {
-                if encoding != "base64+zstd" {
-                    return Err(Error::InvalidAccountEncoding(encoding.clone()));
+        if let Some(value) = response.result.value {
+            match value.data.get(1) {
+                None => {
+                    return Err(Error::MissingAccountEncoding);
+                }
+                Some(encoding) => {
+                    if encoding != "base64+zstd" {
+                        return Err(Error::InvalidAccountEncoding(encoding.clone()));
+                    }
+                    match value.data.get(0) {
+                        None => {
+                            return Err(Error::MissingAccountData);
+                        }
+                        Some(data) => {
+                            let decoded = base64::decode(data)?;
+                            let data = zstd::decode_all(decoded.as_slice())?;
+                            Ok(Some(AccountInfo {
+                                data,
+                                executable: value.executable,
+                                lamports: value.lamports,
+                                owner: value.owner.parse()?,
+                                rent_epoch: value.rent_epoch,
+                            }))
+                        }
+                    }
                 }
             }
-        }
-
-        match response.result.value.data.get(0) {
-            None => Err(Error::MissingAccountData),
-            Some(data) => {
-                let decoded = base64::decode(data)?;
-                let data = zstd::decode_all(decoded.as_slice())?;
-
-                Ok(AccountInfo {
-                    data,
-                    executable: response.result.value.executable,
-                    lamports: response.result.value.lamports,
-                    owner: response.result.value.owner.parse()?,
-                    rent_epoch: response.result.value.rent_epoch,
-                })
-            }
+        } else {
+            Ok(None)
         }
     }
 
