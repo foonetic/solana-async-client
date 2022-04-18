@@ -7,7 +7,11 @@ use crate::{
         TransactionReply,
     },
 };
-use solana_program::hash::Hash;
+use solana_program::{
+    bpf_loader, bpf_loader_deprecated,
+    bpf_loader_upgradeable::{self, UpgradeableLoaderState},
+    hash::Hash,
+};
 use solana_sdk::{
     commitment_config::{CommitmentConfig, CommitmentLevel},
     pubkey::Pubkey,
@@ -350,7 +354,6 @@ impl RpcClient {
             .text()
             .await?;
 
-
         let response = parse_json::<AccountInfoReply>(&response)?;
 
         if let Some(value) = response.result.value {
@@ -464,6 +467,45 @@ impl RpcClient {
         }
 
         Ok(accounts)
+    }
+
+    /// Returns the BPF code corresponding to a deployed program.
+    pub async fn get_program_bpf(
+        &self,
+        program: &Pubkey,
+        commitment: CommitmentLevel,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        match self.get_account_info(program, commitment, None).await? {
+            None => {
+                return Ok(None);
+            }
+            Some(account) => {
+                if account.owner == bpf_loader::id() || account.owner == bpf_loader_deprecated::id()
+                {
+                    return Ok(Some(account.data));
+                } else if account.owner == bpf_loader_upgradeable::id() {
+                    if let Ok(UpgradeableLoaderState::Program {
+                        programdata_address,
+                    }) = bincode::deserialize(&account.data)
+                    {
+                        if let Ok(Some(programdata_account)) = self
+                            .get_account_info(&programdata_address, commitment, None)
+                            .await
+                        {
+                            if let Ok(UpgradeableLoaderState::ProgramData { .. }) =
+                                bincode::deserialize(&programdata_account.data)
+                            {
+                                let offset =
+                                    UpgradeableLoaderState::programdata_data_offset().unwrap_or(0);
+                                return Ok(Some(programdata_account.data[offset..].to_vec()));
+                            }
+                        }
+                    }
+                }
+
+                return Err(Error::InvalidProgramAccount(program.clone()));
+            }
+        }
     }
 }
 

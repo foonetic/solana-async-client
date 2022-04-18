@@ -63,5 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("Program accounts: {:?}", program_accounts);
 
+    let bpf = client
+        .get_program_bpf(&spl_token::ID, CommitmentLevel::Confirmed)
+        .await?;
+    println!(
+        "Token program bytes: {}",
+        bpf.unwrap_or_else(Vec::new).len()
+    );
+
     Ok(())
 }

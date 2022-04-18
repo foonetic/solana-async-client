@@ -1,3 +1,5 @@
+use solana_program::pubkey::Pubkey;
+
 use crate::rpc::ErrorReply;
 
 #[derive(Debug)]
@@ -21,6 +23,7 @@ pub enum Error {
     Base64DecodeError(base64::DecodeError),
     IOError(std::io::Error),
     ParsePubkeyError(solana_sdk::pubkey::ParsePubkeyError),
+    InvalidProgramAccount(Pubkey),
 }
 
 impl From<reqwest::Error> for Error {
