@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Pubkey = {}", keypair.pubkey());
 
     let airdrop = client
-        .request_airdrop(&keypair.pubkey(), 1_000_000_000, CommitmentLevel::Finalized)
+        .request_airdrop(&keypair.pubkey(), 1_000_000_000, CommitmentLevel::Confirmed)
         .await?;
     println!("Airdrop signature = {}", airdrop);
 
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &keypair.pubkey(),
     );
     let recent_blockhash = client
-        .get_latest_blockhash(CommitmentLevel::Finalized)
+        .get_latest_blockhash(CommitmentLevel::Confirmed)
         .await?;
     println!("Recent blockhash = {}", recent_blockhash.hash);
 
@@ -48,10 +48,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recent_blockhash.hash,
     );
     let signature = client
-        .send_and_confirm_transaction(&transaction, CommitmentLevel::Finalized)
+        .send_and_confirm_transaction(&transaction, CommitmentLevel::Confirmed)
         .await?;
 
     println!("Signature: {}", signature);
+
+    let account_info = client
+        .get_account_info(&new_account.pubkey(), CommitmentLevel::Confirmed, None)
+        .await?;
+    println!("Account Info: {:?}", account_info);
+
+    let program_accounts = client
+        .get_program_accounts(&keypair.pubkey(), CommitmentLevel::Confirmed, None, None)
+        .await?;
+    println!("Program accounts: {:?}", program_accounts);
 
     Ok(())
 }

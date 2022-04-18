@@ -94,3 +94,35 @@ pub struct SignatureNotificationParamsResult {
 pub struct SignatureNotificationParamsResultValue {
     pub err: serde_json::Value,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct AccountInfoReply {
+    pub result: AccountInfoReplyResult,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AccountInfoReplyResult {
+    pub context: ContextWithSlot,
+    pub value: AccountInfoReplyResultValue,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfoReplyResultValue {
+    pub data: Vec<String>,
+    pub executable: bool,
+    pub lamports: u64,
+    pub owner: String,
+    pub rent_epoch: u64,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ProgramAccountsReply {
+    pub result: Vec<ProgramAccountsReplyResult>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ProgramAccountsReplyResult {
+    pub account: AccountInfoReplyResultValue,
+    pub pubkey: String,
+}

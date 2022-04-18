@@ -2,8 +2,9 @@ use crate::{
     error::Error,
     pubsub::{Pubsub, PubsubRequest},
     rpc::{
-        ErrorReply, IsBlockhashValidReply, LatestBlockhashReply,
-        MinimumBalanceForRentExemptionReply, SignatureStatusesReply, TransactionReply,
+        AccountInfoReply, ErrorReply, IsBlockhashValidReply, LatestBlockhashReply,
+        MinimumBalanceForRentExemptionReply, ProgramAccountsReply, SignatureStatusesReply,
+        TransactionReply,
     },
 };
 use solana_program::hash::Hash;
@@ -34,10 +35,32 @@ pub struct RpcClient {
 }
 
 /// Return value for the get_latest_blockhash RPC call.
+#[derive(Debug)]
 pub struct LatestBlockhash {
     pub slot: u64,
     pub hash: Hash,
     pub last_valid_block_height: u64,
+}
+
+/// Return value for get_account_info RPC call.
+#[derive(Debug)]
+pub struct AccountInfo {
+    pub data: Vec<u8>,
+    pub executable: bool,
+    pub lamports: u64,
+    pub owner: Pubkey,
+    pub rent_epoch: u64,
+}
+
+/// Request a specific slice of data from an account.
+pub struct DataSlice {
+    pub offset: usize,
+    pub length: usize,
+}
+
+pub enum AccountFilter {
+    DataSize(usize),
+    MemCmp { offset: usize, bytes: Vec<u8> },
 }
 
 impl RpcClient {
@@ -294,6 +317,144 @@ impl RpcClient {
             }
             sleep(Duration::from_millis(400)).await;
         }
+    }
+
+    /// Returns an account. If a data slice is provided, then only the given
+    /// subset of the account is returned.
+    pub async fn get_account_info(
+        &self,
+        pubkey: &Pubkey,
+        commitment: CommitmentLevel,
+        data_slice: Option<&DataSlice>,
+    ) -> Result<AccountInfo, Error> {
+        let response = self
+            .http
+            .post(&self.url)
+            .body(format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":["{}",{{"commitment":"{}","encoding":"base64+zstd"{}}}]}}"#,
+                pubkey.to_string(),
+                commitment.to_string(),
+                if let Some(data_slice) = data_slice {
+                    format!(r#","dataSlice":{{"offset":{},"length":{}}}"#, data_slice.offset, data_slice.length)
+                } else {
+                    "".to_string()
+                }
+            ))
+            .header("Content-Type", "application/json")
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        let response = parse_json::<AccountInfoReply>(&response)?;
+
+        match response.result.value.data.get(1) {
+            None => {
+                return Err(Error::MissingAccountEncoding);
+            }
+            Some(encoding) => {
+                if encoding != "base64+zstd" {
+                    return Err(Error::InvalidAccountEncoding(encoding.clone()));
+                }
+            }
+        }
+
+        match response.result.value.data.get(0) {
+            None => Err(Error::MissingAccountData),
+            Some(data) => {
+                let decoded = base64::decode(data)?;
+                let data = zstd::decode_all(decoded.as_slice())?;
+
+                Ok(AccountInfo {
+                    data,
+                    executable: response.result.value.executable,
+                    lamports: response.result.value.lamports,
+                    owner: response.result.value.owner.parse()?,
+                    rent_epoch: response.result.value.rent_epoch,
+                })
+            }
+        }
+    }
+
+    /// Returns the accounts belonging to the given program. Optionally return a
+    /// subset of the account data. Optionally filter by account size and data
+    /// contents.
+    pub async fn get_program_accounts(
+        &self,
+        program: &Pubkey,
+        commitment: CommitmentLevel,
+        data_slice: Option<&DataSlice>,
+        filters: Option<&[AccountFilter]>,
+    ) -> Result<Vec<(Pubkey, AccountInfo)>, Error> {
+        let response = self
+            .http
+            .post(&self.url)
+            .body(format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"getProgramAccounts","params":["{}",{{"commitment":"{}","encoding":"base64+zstd"{}{}}}]}}"#,
+                program.to_string(),
+                commitment.to_string(),
+                if let Some(data_slice) = data_slice {
+                    format!(r#","dataSlice":{{"offset":{},"length":{}}}"#, data_slice.offset, data_slice.length)
+                } else {
+                    "".to_string()
+                },
+                if let Some(filters) = filters {
+                    let formatted = filters.iter().map(|f| match f {
+                        AccountFilter::DataSize(size) => format!(r#"{{"dataSize":{}}}"#, size),
+                        AccountFilter::MemCmp{offset, bytes} => {
+                            let encoded = bs58::encode(bytes).into_string();
+                            format!(r#"{{"memcmp":{{"offset":{},"bytes":"{}"}}"#, offset, encoded)
+                        }
+                    }).collect::<Vec<String>>().join(",");
+                    format!(r#","filters":[{}]"#, formatted)
+                } else {
+                    "".to_string()
+                }
+            ))
+            .header("Content-Type", "application/json")
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        let response = parse_json::<ProgramAccountsReply>(&response)?;
+
+        let mut accounts = Vec::new();
+        for account in response.result.iter() {
+            match account.account.data.get(1) {
+                None => {
+                    return Err(Error::MissingAccountEncoding);
+                }
+                Some(encoding) => {
+                    if encoding != "base64+zstd" {
+                        return Err(Error::InvalidAccountEncoding(encoding.clone()));
+                    }
+                }
+            }
+
+            match account.account.data.get(0) {
+                None => {
+                    return Err(Error::MissingAccountData);
+                }
+                Some(data) => {
+                    let decoded = base64::decode(data)?;
+                    let data = zstd::decode_all(decoded.as_slice())?;
+
+                    accounts.push((
+                        account.pubkey.parse()?,
+                        AccountInfo {
+                            data,
+                            executable: account.account.executable,
+                            lamports: account.account.lamports,
+                            owner: account.account.owner.parse()?,
+                            rent_epoch: account.account.rent_epoch,
+                        },
+                    ));
+                }
+            }
+        }
+
+        Ok(accounts)
     }
 }
 

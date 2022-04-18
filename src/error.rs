@@ -15,6 +15,12 @@ pub enum Error {
     UrlParseError(url::ParseError),
     TungsteniteError(tokio_tungstenite::tungstenite::Error),
     PubsubDied,
+    MissingAccountEncoding,
+    InvalidAccountEncoding(String),
+    MissingAccountData,
+    Base64DecodeError(base64::DecodeError),
+    IOError(std::io::Error),
+    ParsePubkeyError(solana_sdk::pubkey::ParsePubkeyError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -35,6 +41,12 @@ impl From<solana_sdk::signature::ParseSignatureError> for Error {
     }
 }
 
+impl From<solana_sdk::pubkey::ParsePubkeyError> for Error {
+    fn from(err: solana_sdk::pubkey::ParsePubkeyError) -> Self {
+        Self::ParsePubkeyError(err)
+    }
+}
+
 impl From<solana_program::hash::ParseHashError> for Error {
     fn from(err: solana_program::hash::ParseHashError) -> Self {
         Self::SolanaParseHashError(err)
@@ -50,6 +62,18 @@ impl From<url::ParseError> for Error {
 impl From<tokio_tungstenite::tungstenite::Error> for Error {
     fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
         Self::TungsteniteError(err)
+    }
+}
+
+impl From<base64::DecodeError> for Error {
+    fn from(err: base64::DecodeError) -> Self {
+        Self::Base64DecodeError(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Self::IOError(err)
     }
 }
 
