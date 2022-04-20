@@ -415,7 +415,7 @@ impl RpcClient {
                         AccountFilter::DataSize(size) => format!(r#"{{"dataSize":{}}}"#, size),
                         AccountFilter::MemCmp{offset, bytes} => {
                             let encoded = bs58::encode(bytes).into_string();
-                            format!(r#"{{"memcmp":{{"offset":{},"bytes":"{}"}}"#, offset, encoded)
+                            format!(r#"{{"memcmp":{{"offset":{},"bytes":"{}"}}}}"#, offset, encoded)
                         }
                     }).collect::<Vec<String>>().join(",");
                     format!(r#","filters":[{}]"#, formatted)
