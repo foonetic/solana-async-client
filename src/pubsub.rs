@@ -1,16 +1,20 @@
 use crate::{
+    client::AccountInfo,
     error::Error,
-    rpc::{SignatureNotification, SubscriptionReply},
+    rpc::{AccountNotification, SignatureNotification, SubscriptionReply},
 };
 use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
-use solana_sdk::{commitment_config::CommitmentLevel, signature::Signature};
-use std::{collections::HashMap, time::Duration};
+use solana_sdk::{commitment_config::CommitmentLevel, pubkey::Pubkey, signature::Signature};
+use std::{collections::HashMap, str::FromStr, time::Duration};
 use tokio::{
     net::TcpStream,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        watch,
+    },
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
@@ -26,6 +30,7 @@ pub struct Pubsub {
 
     subscription_to_id: HashMap<u64, u64>,
     signature_notifiers: HashMap<u64, UnboundedSender<bool>>,
+    account_subscribers: HashMap<u64, watch::Sender<Option<AccountInfo>>>,
 }
 
 /// A request sent by the RpcClient.
@@ -33,6 +38,7 @@ pub enum PubsubRequest {
     /// Subscribe to signature updates at the given commitment level. On reply,
     /// send the confirmation status back on the provided channel.
     SignatureSubscribe(Signature, CommitmentLevel, UnboundedSender<bool>),
+    AccountSubscribe(Pubkey, CommitmentLevel, watch::Sender<Option<AccountInfo>>),
 }
 
 impl Pubsub {
@@ -85,6 +91,7 @@ impl Pubsub {
             disconnect_sender: disconnect_sender.clone(),
             subscription_to_id: HashMap::new(),
             signature_notifiers: HashMap::new(),
+            account_subscribers: HashMap::new(),
         })
     }
 
@@ -121,7 +128,10 @@ impl Pubsub {
                             }
                         }
                         Ok(message) => {
-                            self.on_message(message);
+                            if let Err(_) = self.on_message(message) {
+                                // We got a disconnect message.
+                                return;
+                            }
                         }
                     }
                 }
@@ -136,13 +146,13 @@ impl Pubsub {
         }
     }
 
-    fn on_message(&mut self, message: Message) {
+    fn on_message(&mut self, message: Message) -> Result<(), ()> {
         match message {
             Message::Text(text) => {
                 if let Ok(reply) = serde_json::from_str::<SubscriptionReply>(&text) {
                     self.subscription_to_id.insert(reply.result, reply.id);
                 } else if let Ok(reply) = serde_json::from_str::<SignatureNotification>(&text) {
-                    if let Some(id) = self.subscription_to_id.remove(&reply.params.subscription) {
+                    if let Some(id) = self.subscription_to_id.get(&reply.params.subscription) {
                         if let Some(notify) = self.signature_notifiers.remove(&id) {
                             if let Err(_) = notify.send(reply.params.result.value.err.is_null()) {
                                 // Do nothing since the channel is dead. This
@@ -152,14 +162,59 @@ impl Pubsub {
                             }
                         }
                     }
+                } else if let Ok(reply) = serde_json::from_str::<AccountNotification>(&text) {
+                    if let Some(id) = self.subscription_to_id.get(&reply.params.subscription) {
+                        if let Some(notify) = self.account_subscribers.get(&id) {
+                            if let Some(account) = reply.params.result.value {
+                                if let Some(data) = account.data.get(0) {
+                                    if let Ok(decoded_data) = base64::decode(&data) {
+                                        if let Ok(data) = zstd::decode_all(decoded_data.as_slice())
+                                        {
+                                            if let Ok(owner) = Pubkey::from_str(&account.owner) {
+                                                let account_info = AccountInfo {
+                                                    data: data,
+                                                    executable: account.executable,
+                                                    lamports: account.lamports,
+                                                    owner: owner,
+                                                    rent_epoch: account.rent_epoch,
+                                                };
+                                                if let Err(_) = notify.send(Some(account_info)) {
+                                                    // All receivers dropped. Unsubscribe and remove from tracking.
+                                                    self.subscription_to_id
+                                                        .remove(&reply.params.subscription);
+
+                                                    let id = self.next_request();
+                                                    if let Err(_) = self.enqueue_write.send(Message::Text(format!(r#"{{"jsonrpc":"2.0","id":{},"method":"accountUnsubscribe","params":[{}]}}"#, id, reply.params.subscription))) { return Err(()) }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn on_command(&mut self, command: PubsubRequest) -> Result<(), ()> {
         match command {
+            PubsubRequest::AccountSubscribe(pubkey, commitment, sender) => {
+                let id = self.next_request();
+                self.account_subscribers.insert(id, sender);
+
+                if let Err(_) = self.enqueue_write.send(
+                    Message::Text(
+                        format!(
+                            r#"{{"jsonrpc":"2.0","id":{},"method":"accountSubscribe","params":["{}",{{"commitment":"{}","encoding":"base64+zstd"}}]}}"#, 
+                            id, pubkey.to_string(), commitment.to_string()))) {
+                    return Err(());
+                }
+            }
+
             PubsubRequest::SignatureSubscribe(signature, commitment, sender) => {
                 let id = self.next_request();
                 self.signature_notifiers.insert(id, sender);

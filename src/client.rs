@@ -20,7 +20,10 @@ use solana_sdk::{
 };
 use std::time::Duration;
 use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedSender},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedSender},
+        watch,
+    },
     time::sleep,
 };
 use url::Url;
@@ -47,7 +50,7 @@ pub struct LatestBlockhash {
 }
 
 /// Return value for get_account_info RPC call.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AccountInfo {
     pub data: Vec<u8>,
     pub executable: bool,
@@ -386,6 +389,24 @@ impl RpcClient {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn account_subscribe(
+        &self,
+        pubkey: &Pubkey,
+        commitment: CommitmentLevel,
+    ) -> Result<watch::Receiver<Option<AccountInfo>>, Error> {
+        let (send, receive) = watch::channel(None);
+
+        self.send_command
+            .send(PubsubRequest::AccountSubscribe(
+                pubkey.clone(),
+                commitment,
+                send,
+            ))
+            .map_err(|_| Error::PubsubDied)?;
+
+        Ok(receive)
     }
 
     /// Returns the accounts belonging to the given program. Optionally return a

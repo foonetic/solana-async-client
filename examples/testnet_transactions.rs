@@ -6,12 +6,13 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use std::time::Duration;
+use tokio_stream::{wrappers::WatchStream, StreamExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = RpcClient::new_with_timeout(
-        RestAPI("https://api.testnet.solana.com".to_string()),
-        PubsubAPI("wss://api.testnet.solana.com".to_string()),
+        RestAPI("https://api.devnet.solana.com".to_string()),
+        PubsubAPI("wss://api.devnet.solana.com".to_string()),
         Duration::from_secs(30),
     )
     .await?;
@@ -40,6 +41,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_latest_blockhash(CommitmentLevel::Confirmed)
         .await?;
     println!("Recent blockhash = {}", recent_blockhash.hash);
+
+    let updates = client
+        .account_subscribe(&new_account.pubkey(), CommitmentLevel::Confirmed)
+        .await?;
+    tokio::spawn(async move {
+        let mut stream = WatchStream::new(updates);
+        while let Some(update) = stream.next().await {
+            println!("Account update: {:?}", update);
+        }
+        println!("No more account updates");
+    });
 
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],

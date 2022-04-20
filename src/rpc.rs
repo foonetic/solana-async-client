@@ -126,3 +126,14 @@ pub struct ProgramAccountsReplyResult {
     pub account: AccountInfoReplyResultValue,
     pub pubkey: String,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct AccountNotification {
+    pub params: AccountNotificationParams,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AccountNotificationParams {
+    pub result: AccountInfoReplyResult,
+    pub subscription: u64,
+}
