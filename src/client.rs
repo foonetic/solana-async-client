@@ -16,7 +16,7 @@ use solana_sdk::{
     commitment_config::{CommitmentConfig, CommitmentLevel},
     pubkey::Pubkey,
     signature::Signature,
-    transaction::Transaction,
+    transaction::{Transaction, TransactionError},
 };
 use std::time::Duration;
 use tokio::{
@@ -35,6 +35,7 @@ pub struct RestAPI(pub String);
 pub struct PubsubAPI(pub String);
 
 /// JSON RPC client.
+#[derive(Clone)]
 pub struct RpcClient {
     http: reqwest::Client,
     url: String,
@@ -261,7 +262,7 @@ impl RpcClient {
         &self,
         signature: Signature,
         commitment: CommitmentLevel,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         let recent_blockhash = self.get_latest_blockhash(commitment).await?;
         let (notify, mut receive) = unbounded_channel();
         self.send_command
@@ -272,25 +273,34 @@ impl RpcClient {
             ))
             .map_err(|_| Error::PubsubDied)?;
 
-        let block = async {
+        let client = self.clone();
+        tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             loop {
                 interval.tick().await;
-                if let Ok(status) = self.get_signature_statuses(&[signature]).await {
+                if let Ok(status) = client.get_signature_statuses(&[signature]).await {
                     if let Some(Some(status)) = status.result.value.get(0) {
+                        if let Some(err) = &status.err {
+                            if let Err(_) = notify.send(Some(err.clone())) {
+                                // Ignore error.
+                            }
+                            break;
+                        }
+
                         if status.satisfies_commitment(CommitmentConfig { commitment }) {
-                            if let Err(_) = notify.send(true) {
+                            if let Err(_) = notify.send(None) {
                                 // Ignore error.
                             }
                             break;
                         }
                     }
-                    if let Ok(res) = self
+
+                    if let Ok(res) = client
                         .is_blockhash_valid(&recent_blockhash.hash, commitment)
                         .await
                     {
                         if !res {
-                            if let Err(_) = notify.send(false) {
+                            if let Err(_) = notify.send(Some(TransactionError::BlockhashNotFound)) {
                                 // Ignore error
                             }
                             break;
@@ -298,17 +308,26 @@ impl RpcClient {
                     }
                 }
             }
-        };
-        tokio::pin!(block);
+        });
 
+        let result;
         loop {
             tokio::select! {
                 Some(confirmed) = receive.recv() => {
-                    return Ok(confirmed);
+                    match confirmed {
+                        None => {
+                            result = Ok(());
+                            break;
+                        }
+                        Some(err) => {
+                            result = Err(err.into());
+                            break;
+                        }
+                    }
                 }
-                _ = &mut block => {}
             }
         }
+        return result;
     }
 
     /// Retries a transaction until it is confirmed.
@@ -319,10 +338,22 @@ impl RpcClient {
     ) -> Result<Signature, Error> {
         loop {
             let signature = self.send_transaction(transaction).await?;
-            if self.confirm_signature(signature, commitment).await? {
-                return Ok(signature);
+            match self.confirm_signature(signature, commitment).await {
+                Ok(_) => {
+                    return Ok(signature);
+                }
+
+                // Transaction errors are permanent and must be handled by the
+                // client. Other errors can be retried.
+                Err(err) => match err {
+                    Error::TransactionError(_) => {
+                        return Err(err);
+                    }
+                    _ => {
+                        sleep(Duration::from_millis(400)).await;
+                    }
+                },
             }
-            sleep(Duration::from_millis(400)).await;
         }
     }
 

@@ -7,7 +7,10 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
-use solana_sdk::{commitment_config::CommitmentLevel, pubkey::Pubkey, signature::Signature};
+use solana_sdk::{
+    commitment_config::CommitmentLevel, pubkey::Pubkey, signature::Signature,
+    transaction::TransactionError,
+};
 use std::{collections::HashMap, str::FromStr, time::Duration};
 use tokio::{
     net::TcpStream,
@@ -29,7 +32,7 @@ pub struct Pubsub {
     disconnect_sender: UnboundedSender<()>,
 
     subscription_to_id: HashMap<u64, u64>,
-    signature_notifiers: HashMap<u64, UnboundedSender<bool>>,
+    signature_notifiers: HashMap<u64, UnboundedSender<Option<TransactionError>>>,
     account_subscribers: HashMap<u64, watch::Sender<Option<AccountInfo>>>,
 }
 
@@ -37,7 +40,11 @@ pub struct Pubsub {
 pub enum PubsubRequest {
     /// Subscribe to signature updates at the given commitment level. On reply,
     /// send the confirmation status back on the provided channel.
-    SignatureSubscribe(Signature, CommitmentLevel, UnboundedSender<bool>),
+    SignatureSubscribe(
+        Signature,
+        CommitmentLevel,
+        UnboundedSender<Option<TransactionError>>,
+    ),
     AccountSubscribe(Pubkey, CommitmentLevel, watch::Sender<Option<AccountInfo>>),
 }
 
@@ -154,7 +161,7 @@ impl Pubsub {
                 } else if let Ok(reply) = serde_json::from_str::<SignatureNotification>(&text) {
                     if let Some(id) = self.subscription_to_id.get(&reply.params.subscription) {
                         if let Some(notify) = self.signature_notifiers.remove(&id) {
-                            if let Err(_) = notify.send(reply.params.result.value.err.is_null()) {
+                            if let Err(_) = notify.send(reply.params.result.value.err) {
                                 // Do nothing since the channel is dead. This
                                 // isn't necessarily an error since the
                                 // notification may have already been receieved

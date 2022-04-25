@@ -24,6 +24,7 @@ pub enum Error {
     IOError(std::io::Error),
     ParsePubkeyError(solana_sdk::pubkey::ParsePubkeyError),
     InvalidProgramAccount(Pubkey),
+    TransactionError(solana_sdk::transaction::TransactionError),
 }
 
 impl From<reqwest::Error> for Error {
@@ -77,6 +78,12 @@ impl From<base64::DecodeError> for Error {
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
         Self::IOError(err)
+    }
+}
+
+impl From<solana_sdk::transaction::TransactionError> for Error {
+    fn from(err: solana_sdk::transaction::TransactionError) -> Self {
+        Self::TransactionError(err)
     }
 }
 

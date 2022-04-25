@@ -83,5 +83,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bpf.unwrap_or_else(Vec::new).len()
     );
 
+    {
+        // Try to create a new account but with too many lamports.
+        let new_account = Keypair::new();
+        let instruction = create_account(
+            &keypair.pubkey(),
+            &new_account.pubkey(),
+            1_000_000_000_000,
+            5,
+            &keypair.pubkey(),
+        );
+
+        let transaction = Transaction::new_signed_with_payer(
+            &[instruction],
+            Some(&keypair.pubkey()),
+            &[&keypair, &new_account],
+            recent_blockhash.hash,
+        );
+        let result = client
+            .send_and_confirm_transaction(&transaction, CommitmentLevel::Confirmed)
+            .await;
+        println!("Overdraft Result: {:?}", result);
+    }
+
     Ok(())
 }

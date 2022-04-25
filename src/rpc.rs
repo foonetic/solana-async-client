@@ -92,7 +92,7 @@ pub struct SignatureNotificationParamsResult {
 
 #[derive(Deserialize, Debug)]
 pub struct SignatureNotificationParamsResultValue {
-    pub err: serde_json::Value,
+    pub err: Option<solana_sdk::transaction::TransactionError>,
 }
 
 #[derive(Deserialize, Debug)]
